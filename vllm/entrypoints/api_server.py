@@ -20,11 +20,20 @@ from vllm.engine.async_llm_engine import AsyncLLMEngine
 from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import random_uuid
-from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
 engine = None
+
+
+def destroy_model_parallel():
+    """Set the groups to none."""
+    global _TENSOR_MODEL_PARALLEL_GROUP
+    _TENSOR_MODEL_PARALLEL_GROUP = None
+    global _PIPELINE_MODEL_PARALLEL_GROUP
+    _PIPELINE_MODEL_PARALLEL_GROUP = None
+    global _PIPELINE_GLOBAL_RANKS
+    _PIPELINE_GLOBAL_RANKS = None
 
 
 def get_model_files(model_path):
