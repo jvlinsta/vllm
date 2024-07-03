@@ -137,13 +137,23 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gptq_marlin_repack", &gptq_marlin_repack);
   ops.impl("gptq_marlin_repack", torch::kCUDA, &gptq_marlin_repack);
 
+  // fp8_marlin Optimized Quantized GEMM for FP8 weight-only.
+  ops.def("fp8_marlin_gemm", &fp8_marlin_gemm);
+  ops.impl("fp8_marlin_gemm", torch::kCUDA, &fp8_marlin_gemm);
+
   // CUTLASS w8a8 GEMM, supporting symmetric per-tensor or per-row/column
   // quantization.
   ops.def(
       "cutlass_scaled_mm(Tensor! out, Tensor a,"
       "                  Tensor b, Tensor a_scales,"
-      "                  Tensor b_scales) -> ()");
+      "                  Tensor b_scales, Tensor? bias) -> ()");
   ops.impl("cutlass_scaled_mm", torch::kCUDA, &cutlass_scaled_mm);
+
+  // Check if cutlass scaled_mm is supported for CUDA devices of the given
+  // capability
+  ops.def("cutlass_scaled_mm_supports_fp8", &cutlass_scaled_mm_supports_fp8);
+  ops.impl("cutlass_scaled_mm_supports_fp8", torch::kCUDA,
+           &cutlass_scaled_mm_supports_fp8);
 #endif
 
   // Quantized GEMM for GPTQ.
