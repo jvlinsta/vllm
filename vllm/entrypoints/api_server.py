@@ -27,6 +27,9 @@ from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, random_uuid
 
+#DEV: to switch into HF hub models
+from huggingface_hub import repo_exists
+
 os.environ[
     'VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'  #https://github.com/vllm-project/vllm/issues/6152
 
@@ -54,6 +57,8 @@ def get_model_files(model_path):
 
 
 def get_model_path(model_path):
+    if repo_exists(model_path):  #valid huggingface repo
+        return model_path
     model_path = Path(model_path)
     if len(get_model_files(model_path)) > 0:
         return str(model_path)
