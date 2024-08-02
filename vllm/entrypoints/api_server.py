@@ -6,9 +6,15 @@ We are also not going to accept PRs modifying this file, please
 change `vllm/entrypoints/openai/api_server.py` instead.
 """
 
+import os
+from pathlib import Path
+import torch
 import json
 import ssl
 from typing import AsyncGenerator
+import gc
+import ray
+from ray import tune
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -20,6 +26,9 @@ from vllm.logger import init_logger
 from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, random_uuid
+
+os.environ[
+    'VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'  #https://github.com/vllm-project/vllm/issues/6152
 
 logger = init_logger("vllm.entrypoints.api_server")
 
@@ -46,7 +55,6 @@ def get_model_files(model_path):
 
 def get_model_path(model_path):
     model_path = Path(model_path)
-
     if len(get_model_files(model_path)) > 0:
         return str(model_path)
     merged_path = model_path / "merged"
@@ -61,10 +69,13 @@ async def change_model(request: Request) -> Response:
     new_path = request_dict.pop("model_path")
     print(f"Request with new path: {new_path}")
     try:
-        new_path = get_model_path(new_path)
+        new_path = get_model_path(
+            new_path)  #just checking if we should get merged or not
     except Exception as e:
-        return JSONResponse(status_code=404, content={"message": str(e)})
+        return JSONResponse(status_code=405,
+                            content={"message": str(e) + ' cannot get path'})
 
+    print(f"Setting  new path: {new_path}")
     global engine_args
     current_path = engine_args.model
     if current_path == new_path:
@@ -83,7 +94,9 @@ async def change_model(request: Request) -> Response:
         engine = AsyncLLMEngine.from_engine_args(engine_args)
         return Response(status_code=200)
     except Exception as e:
-        return JSONResponse(status_code=404, content={"message": str(e)})
+        return JSONResponse(
+            status_code=404,
+            content={"message": str(e) + ' cannot change model'})
 
 
 @app.get("/health")
