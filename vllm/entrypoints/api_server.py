@@ -77,24 +77,22 @@ async def change_model(request: Request) -> Response:
     if current_path == new_path:
         return Response(status_code=200)
 
-    # DEV: https://github.com/vllm-project/vllm/issues/1908
-    destroy_model_parallel()  ##Invalid process group specified
-    destroy_distributed_environment()
-    global engine
-    del engine
-    gc.collect()
-    # del llm.llm_engine.model_executor
-    # del llm
-    gc.collect()
-    torch.cuda.empty_cache()
-    #ray.shutdown()
-
-    print(f"cuda memory: {torch.cuda.memory_allocated() // 1024 // 1024}MB")
-
-    engine_args.model = new_path
-    engine_args.tokenizer = new_path
-
     try:
+        # DEV: https://github.com/vllm-project/vllm/issues/1908
+        destroy_model_parallel() 
+        destroy_distributed_environment()
+        global engine
+        del engine
+        gc.collect()
+        gc.collect()
+        torch.cuda.empty_cache()
+        #ray.shutdown()
+
+        print(f"cuda memory: {torch.cuda.memory_allocated() // 1024 // 1024}MB")
+
+        engine_args.model = new_path
+        engine_args.tokenizer = new_path
+        engine = AsyncLLMEngine.from_engine_args(engine_args)
         return Response(status_code=200)
     except Exception as e:
         return JSONResponse(
