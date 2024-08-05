@@ -26,6 +26,7 @@ from vllm.logger import init_logger
 from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser, random_uuid
+from vllm.distributed.parallel_state import destroy_model_parallel, destroy_distributed_environment
 
 #DEV: to switch into HF hub models
 from huggingface_hub import repo_exists
@@ -38,16 +39,6 @@ logger = init_logger("vllm.entrypoints.api_server")
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
 engine = None
-
-
-def destroy_model_parallel():
-    """Set the groups to none."""
-    global _TENSOR_MODEL_PARALLEL_GROUP
-    _TENSOR_MODEL_PARALLEL_GROUP = None
-    global _PIPELINE_MODEL_PARALLEL_GROUP
-    _PIPELINE_MODEL_PARALLEL_GROUP = None
-    global _PIPELINE_GLOBAL_RANKS
-    _PIPELINE_GLOBAL_RANKS = None
 
 
 def get_model_files(model_path):
@@ -88,11 +79,16 @@ async def change_model(request: Request) -> Response:
 
     try:
         ray.shutdown()
+        destroy_distributed_environment()
         global engine
         del engine
         gc.collect()
-        torch.cuda.empty_cache()
         destroy_model_parallel()
+        # del llm.llm_engine.model_executor
+        # del llm
+        destroy_model_parallel()
+        gc.collect()
+        torch.cuda.empty_cache()
 
         engine_args.model = new_path
         engine_args.tokenizer = new_path
