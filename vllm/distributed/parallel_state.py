@@ -329,7 +329,7 @@ class GroupCoordinator:
     def gather(self,
                input_: torch.Tensor,
                dst: int = 0,
-               dim: int = -1) -> torch.Tensor:
+               dim: int = -1) -> Optional[torch.Tensor]:
         """
         NOTE: We assume that the input tensor is on the same device across
         all the ranks.
@@ -713,8 +713,8 @@ class GroupCoordinator:
              size: torch.Size,
              dtype: torch.dtype,
              src: Optional[int] = None) -> torch.Tensor:
-        """Receives a tensor from the src rank."""
-        """NOTE: `src` is the local rank of the destination rank."""
+        """Receives a tensor from the source rank."""
+        """NOTE: `src` is the local rank of the source rank."""
         if src is None:
             src = (self.rank_in_group - 1) % self.world_size
 
@@ -905,11 +905,15 @@ def initialize_model_parallel(
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size: int = torch.distributed.get_world_size()
-    backend = backend or torch.distributed.get_backend(
-        get_world_group().device_group)
 
-    if (world_size !=
-            tensor_model_parallel_size * pipeline_model_parallel_size):
+    try:
+        backend = backend or torch.distributed.get_backend(
+            get_world_group().device_group)
+    except Exception as e:
+        backend = 'nccl'
+
+    if (world_size
+            != tensor_model_parallel_size * pipeline_model_parallel_size):
         raise RuntimeError(
             f"world_size ({world_size}) is not equal to "
             f"tensor_model_parallel_size ({tensor_model_parallel_size}) x "
@@ -959,8 +963,13 @@ def ensure_model_parallel_initialized(
     or ensure tensor-parallel and pipeline-parallel sizes are equal to expected
     values if the model parallel groups are initialized.
     """
-    backend = backend or torch.distributed.get_backend(
-        get_world_group().device_group)
+    try:
+        backend = backend or torch.distributed.get_backend(
+            get_world_group().device_group)
+    except Exception as e:
+        #_WORLD = None
+        backend = 'nccl'
+        
     if not model_parallel_is_initialized():
         initialize_model_parallel(tensor_model_parallel_size,
                                   pipeline_model_parallel_size, backend)

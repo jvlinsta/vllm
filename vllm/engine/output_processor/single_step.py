@@ -29,14 +29,9 @@ class SingleStepOutputProcessor(SequenceGroupOutputProcessor):
     that is currently difficult to schedule multiple steps ahead of time.
     """
 
-    def __init__(
-        self,
-        scheduler_config: SchedulerConfig,
-        detokenizer: Detokenizer,
-        scheduler: List[Scheduler],
-        seq_counter: Counter,
-        stop_checker: StopChecker,
-    ):
+    def __init__(self, scheduler_config: SchedulerConfig,
+                 detokenizer: Detokenizer, scheduler: List[Scheduler],
+                 seq_counter: Counter, stop_checker: StopChecker):
         self.scheduler_config = scheduler_config
         self.detokenizer = detokenizer
         self.scheduler = scheduler
@@ -44,16 +39,24 @@ class SingleStepOutputProcessor(SequenceGroupOutputProcessor):
         self.stop_checker = stop_checker
 
     def process_outputs(self, sequence_group: SequenceGroup,
-                        outputs: List[SequenceGroupOutput]) -> None:
+                        outputs: List[SequenceGroupOutput],
+                        is_async: bool) -> None:
         """Append all new tokens to sequences in the sequence group. Fork any
         surviving beam candidates; free any unsurviving ones.
 
         Invokes detokenizer to detokenize new tokens, and also marks sequences
         as finished if they meet stop conditions.
+        
+        is_async - Indicates whether this postprocessor runs in 
+            parallel with the GPU forward pass and is processing 
+            tokens from the previous step. If this is true, then
+            no tokens need to be appended since it is already done
+            externally (before the next schedule() call)
         """
         assert (len(outputs) == 1
                 ), f"{type(self)} does not support multiple outputs per step"
-        return self._process_sequence_group_outputs(sequence_group, outputs[0])
+        return self._process_sequence_group_outputs(sequence_group, outputs[0],
+                                                    is_async)
 
     def process_prompt_logprob(self, seq_group: SequenceGroup,
                                outputs: List[SequenceGroupOutput]) -> None:
@@ -80,7 +83,35 @@ class SingleStepOutputProcessor(SequenceGroupOutputProcessor):
             seq_group.prompt_logprobs.extend(prompt_logprobs)
 
     def _process_sequence_group_outputs(self, seq_group: SequenceGroup,
-                                        outputs: SequenceGroupOutput) -> None:
+                                        outputs: SequenceGroupOutput,
+                                        is_async: bool) -> None:
+        sampling_params = seq_group.sampling_params
+        if sampling_params.n == 1 and not sampling_params.use_beam_search:
+            # only have one output sample
+            sample = outputs.samples[0]
+            # only have one sequence
+            seq = seq_group.seqs[0]
+            if not is_async:
+                seq.append_token_id(sample.output_token, sample.logprobs)
+            if sampling_params.detokenize and self.detokenizer:
+                new_char_count = self.detokenizer.decode_sequence_inplace(
+                    seq, sampling_params)
+            else:
+                new_char_count = 0
+            self.stop_checker.maybe_stop_sequence(
+                seq,
+                new_char_count,
+                sampling_params,
+                lora_req=seq_group.lora_request,
+            )
+            if seq.is_finished():
+                for scheduler in self.scheduler:
+                    scheduler.free_seq(seq)
+            return
+
+        # TODO: Add support for async for beam search
+        assert not is_async
+
         # Process samples
         samples = outputs.samples
         parent_seqs = seq_group.get_seqs(status=SequenceStatus.RUNNING)
@@ -127,20 +158,20 @@ class SingleStepOutputProcessor(SequenceGroupOutputProcessor):
             child_seqs.append((parent, parent))
 
         for seq, _ in child_seqs:
-            if seq_group.sampling_params.detokenize and self.detokenizer:
+            if sampling_params.detokenize and self.detokenizer:
                 new_char_count = self.detokenizer.decode_sequence_inplace(
-                    seq, seq_group.sampling_params)
+                    seq, sampling_params)
             else:
                 new_char_count = 0
             self.stop_checker.maybe_stop_sequence(
                 seq,
                 new_char_count,
-                seq_group.sampling_params,
+                sampling_params,
                 lora_req=seq_group.lora_request,
             )
 
         # Non-beam search case
-        if not seq_group.sampling_params.use_beam_search:
+        if not sampling_params.use_beam_search:
             # For newly created child sequences, add them to the sequence group
             # and fork them in block manager if they are not finished.
             for seq, parent in child_seqs:
@@ -164,8 +195,8 @@ class SingleStepOutputProcessor(SequenceGroupOutputProcessor):
         # Select the child sequences to keep in the sequence group.
         selected_child_seqs: List[Tuple[Sequence, Optional[Sequence]]] = []
         unselected_child_seqs: List[Tuple[Sequence, Optional[Sequence]]] = []
-        beam_width = seq_group.sampling_params.best_of
-        length_penalty = seq_group.sampling_params.length_penalty
+        beam_width = sampling_params.best_of
+        length_penalty = sampling_params.length_penalty
 
         # Select the newly finished sequences with the highest scores
         # to replace existing finished sequences.
@@ -219,8 +250,8 @@ class SingleStepOutputProcessor(SequenceGroupOutputProcessor):
             best_running_seq = running_child_seqs[0][0]
             current_worst_seq = all_finished_seqs[beam_width - 1][0]
             stop_beam_search = self._check_beam_search_early_stopping(
-                seq_group.sampling_params.early_stopping,
-                seq_group.sampling_params, best_running_seq, current_worst_seq)
+                sampling_params.early_stopping, sampling_params,
+                best_running_seq, current_worst_seq)
 
         if stop_beam_search:
             # Stop the beam search and remove all the running sequences from
